@@ -1,59 +1,87 @@
-!pip install seaborn
 
 # app.py
 # Streamlit UI that loads pre-trained .pkl models from ./model and evaluates on a holdout split.
-# Also supports CSV upload for test-only predictions.
+# If .pkl artifacts are missing, it trains the models on the fly and saves them.
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import seaborn as sns
 import matplotlib.pyplot as plt
 from pathlib import Path
 import joblib
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 from sklearn.metrics import (
     accuracy_score, roc_auc_score, precision_score, recall_score, f1_score,
     matthews_corrcoef, confusion_matrix, classification_report
 )
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 
 st.set_page_config(page_title="ML Assignment-2 | Breast Cancer (Diagnostic)", layout="wide")
 
+# ----------------------- Constants -----------------------
 MODEL_DIR = Path("model")
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
 MODEL_FILES = {
     "Logistic Regression": MODEL_DIR / "logistic_regression.pkl",
     "Decision Tree":        MODEL_DIR / "decision_tree.pkl",
     "kNN":                  MODEL_DIR / "knn.pkl",
     "Naive Bayes":          MODEL_DIR / "naive_bayes.pkl",
-    "Random Forest":        MODEL_DIR / "random_forest.pkl",
-    "XGBoost":              MODEL_DIR / "xgboost.pkl",
+    "Random Forest (Ensemble)": MODEL_DIR / "random_forest.pkl",
+    "XGBoost (Ensemble)":       MODEL_DIR / "xgboost.pkl",
 }
 
-# ---------- Utilities ----------
-
+# ----------------------- Utilities -----------------------
 @st.cache_resource(show_spinner=False)
 def load_dataset():
     ds = load_breast_cancer()
     X = pd.DataFrame(ds.data, columns=ds.feature_names)
     y = pd.Series(ds.target, name="target")
     feature_names = list(ds.feature_names)
-    target_names = list(ds.target_names)  # ['malignant', 'benign'] (0, 1)
+    target_names = list(ds.target_names)  # ['malignant', 'benign'] -> 0, 1
     return X, y, feature_names, target_names
 
-@st.cache_resource(show_spinner=False)
-def load_models(model_files: dict):
-    loaded = {}
-    for name, path in model_files.items():
-        if not path.exists():
-            # Give a helpful error for missing artifacts
-            raise FileNotFoundError(
-                f"Missing model file: {path}. "
-                f"Run 'python generate_models.py' first to create .pkl files."
-            )
-        loaded[name] = joblib.load(path)
-    return loaded
+def build_model_registry():
+    """Return fresh, untrained estimators keyed by name."""
+    return {
+        "Logistic Regression": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=500, solver="lbfgs"))
+        ]),
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "kNN": Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", KNeighborsClassifier(n_neighbors=7))
+        ]),
+        "Naive Bayes": Pipeline([
+            # Scaling not strictly required; kept to mirror earlier metrics
+            ("scaler", StandardScaler(with_mean=False)),
+            ("clf", GaussianNB())
+        ]),
+        "Random Forest (Ensemble)": RandomForestClassifier(
+            n_estimators=300, random_state=42
+        ),
+        "XGBoost (Ensemble)": XGBClassifier(
+            n_estimators=400,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.0,
+            random_state=42,
+            eval_metric="logloss",
+            n_jobs=4
+        ),
+    }
 
 def compute_metrics(y_true, y_pred, y_proba_or_score=None):
     m = {
@@ -81,10 +109,48 @@ def predict_proba_if_supported(model, X):
         return model.decision_function(X)
     return None
 
-# ---------- App ----------
+def load_or_train_models(X_train, y_train):
+    """
+    Try to load each .pkl model; if missing, train and save it.
+    Returns dict: name -> fitted estimator.
+    """
+    models = {}
+    fresh_registry = build_model_registry()
+    trained_any = False
 
+    for name, path in MODEL_FILES.items():
+        if path.exists():
+            try:
+                models[name] = joblib.load(path)
+            except Exception:
+                # If loading fails, retrain
+                mdl = fresh_registry[name]
+                mdl.fit(X_train, y_train)
+                models[name] = mdl
+                try:
+                    joblib.dump(mdl, path)
+                except Exception:
+                    pass
+                trained_any = True
+        else:
+            # Train and save
+            mdl = fresh_registry[name]
+            mdl.fit(X_train, y_train)
+            models[name] = mdl
+            try:
+                joblib.dump(mdl, path)
+            except Exception:
+                pass
+            trained_any = True
+
+    if trained_any:
+        st.info("Some model files were missing. Trained the models now and saved them to `model/*.pkl`.")
+    return models
+
+# ----------------------- App UI -----------------------
 st.title("Machine Learning Assignment–2: Classification Models on Breast Cancer (Diagnostic)")
-st.caption("Loads pre-trained .pkl models. Includes metrics, confusion matrix, classification report, and CSV upload.")
+st.caption("Six models + metrics + confusion matrix + classification report + CSV upload. "
+           "If `.pkl` files are missing, the app trains and saves them automatically.")
 
 X, y, feature_names, target_names = load_dataset()
 
@@ -96,15 +162,16 @@ with st.expander("ℹ️ Dataset details", expanded=False):
     )
     st.write("Binary classification dataset with 30 numeric features extracted from digitized images of a breast mass.")
 
-# Train/test split for evaluation (on-the-fly)
+# Split for evaluation
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
 
-# Load all models from ./model
-models = load_models(MODEL_FILES)
+# Load or train models
+with st.spinner("Loading models..."):
+    models = load_or_train_models(X_train, y_train)
 
-# Sidebar controls
+# Sidebar
 st.sidebar.header("Controls")
 model_name = st.sidebar.selectbox("Choose a model", list(models.keys()), index=0)
 show_class_report = st.sidebar.checkbox("Show classification report", value=True)
@@ -127,14 +194,19 @@ metrics_df["Value"] = metrics_df["Value"].apply(
 st.subheader("Evaluation metrics (Test split)")
 st.dataframe(metrics_df, width="stretch")
 
-# Confusion matrix / report
+# Confusion matrix without seaborn
 if show_confusion:
     cm = confusion_matrix(y_test, y_pred)
     fig, ax = plt.subplots(figsize=(5, 4))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("True")
+    im = ax.imshow(cm, cmap="Blues")
+    # Annotate cells
+    for (i, j), val in np.ndenumerate(cm):
+        ax.text(j, i, f"{val}", ha="center", va="center", color="black", fontsize=12)
+    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+    ax.set_xticklabels(target_names); ax.set_yticklabels(target_names)
+    ax.set_xlabel("Predicted"); ax.set_ylabel("True")
     ax.set_title(f"Confusion Matrix — {model_name}")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     st.pyplot(fig)
 
 if show_class_report:
@@ -142,33 +214,28 @@ if show_class_report:
     st.text("Classification Report")
     st.code(report_txt, language="text")
 
-# ---------- Upload test CSV ----------
+# ----------------------- Upload test CSV -----------------------
 st.subheader("Upload a test CSV (optional)")
 st.caption(
-    "Upload **only test data** (Free Streamlit tier is limited). "
-    "CSV must contain the **30 feature columns** with the same names/order as the sklearn dataset."
+    "Upload **only test data**. CSV must contain the **30 feature columns** "
+    "with the same names/order as the sklearn dataset."
 )
 
-# Provide a downloadable sample CSV
 if st.button("Generate & download a sample_test.csv"):
     sample = X_test.iloc[:10].copy()
-    csv_bytes = sample.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="Download sample_test.csv",
-        data=csv_bytes,
+        data=sample.to_csv(index=False).encode("utf-8"),
         file_name="sample_test.csv",
         mime="text/csv",
     )
 
-uploaded = st.file_uploader(
-    "Choose CSV with the same 30 columns as the dataset", type=["csv"]
-)
+uploaded = st.file_uploader("Choose CSV with the same 30 columns as the dataset", type=["csv"])
 if uploaded is not None:
     try:
         test_df = pd.read_csv(uploaded)
         missing = [c for c in feature_names if c not in test_df.columns]
         extra   = [c for c in test_df.columns if c not in feature_names]
-
         if missing:
             st.error(f"Missing expected columns: {missing[:5]}{' ...' if len(missing)>5 else ''}")
         else:
@@ -194,9 +261,7 @@ if uploaded is not None:
                 file_name="predictions.csv",
                 mime="text/csv",
             )
-
     except Exception as e:
         st.error(f"Could not read CSV: {e}")
 
-st.caption("Run this on **BITS Virtual Lab** and take a single screenshot showing metrics + confusion matrix for submission.")
-
+st.caption("If you are running this on BITS Virtual Lab, take one screenshot showing the metrics and confusion matrix for submission.")
