@@ -2,13 +2,14 @@
 # app.py
 # Streamlit UI that loads pre-trained .pkl models from ./model and evaluates on a holdout split.
 # If .pkl artifacts are missing, it trains and saves them automatically.
-# No matplotlib / seaborn required.
+# No joblib / matplotlib / seaborn required. Uses Python's pickle only.
+
+import pickle
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-from pathlib import Path
-import joblib
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
@@ -118,6 +119,14 @@ def predict_proba_if_supported(model, X):
         return model.decision_function(X)
     return None
 
+def pickle_save(obj, path: Path):
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
+
+def pickle_load(path: Path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
 def load_or_train_models(X_train, y_train):
     """
     Load each model from model/*.pkl if present; otherwise train and save it.
@@ -133,7 +142,7 @@ def load_or_train_models(X_train, y_train):
 
         if path.exists():
             try:
-                models[name] = joblib.load(path)
+                models[name] = pickle_load(path)
                 continue
             except Exception:
                 # Fall back to retraining if load fails
@@ -143,7 +152,7 @@ def load_or_train_models(X_train, y_train):
         estimator.fit(X_train, y_train)
         models[name] = estimator
         try:
-            joblib.dump(estimator, path)
+            pickle_save(estimator, path)
         except Exception:
             pass
         trained_any = True
@@ -204,7 +213,7 @@ metrics_df["Value"] = metrics_df["Value"].apply(
 st.subheader("Evaluation metrics (Test split)")
 st.dataframe(metrics_df)
 
-# Confusion matrix (render as a table — no plotting packages)
+# Confusion matrix (table view — no plotting packages)
 if show_confusion:
     cm = confusion_matrix(y_test, y_pred)
     cm_df = pd.DataFrame(cm, index=[f"True {t}" for t in target_names],
