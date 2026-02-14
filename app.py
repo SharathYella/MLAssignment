@@ -1,12 +1,11 @@
 
 # app.py
 # Streamlit UI that loads pre-trained .pkl models from ./model and evaluates on a holdout split.
-# If .pkl artifacts are missing, it trains the models on the fly and saves them.
+# No matplotlib/seaborn dependency. If .pkl files are missing, trains and saves them automatically.
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
 from pathlib import Path
 import joblib
 
@@ -23,7 +22,13 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
+
+# Try to import XGBoost; app will still run if it's not available
+XGB_AVAILABLE = True
+try:
+    from xgboost import XGBClassifier
+except Exception:
+    XGB_AVAILABLE = False
 
 st.set_page_config(page_title="ML Assignment-2 | Breast Cancer (Diagnostic)", layout="wide")
 
@@ -32,12 +37,12 @@ MODEL_DIR = Path("model")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_FILES = {
-    "Logistic Regression": MODEL_DIR / "logistic_regression.pkl",
-    "Decision Tree":        MODEL_DIR / "decision_tree.pkl",
-    "kNN":                  MODEL_DIR / "knn.pkl",
-    "Naive Bayes":          MODEL_DIR / "naive_bayes.pkl",
-    "Random Forest (Ensemble)": MODEL_DIR / "random_forest.pkl",
-    "XGBoost (Ensemble)":       MODEL_DIR / "xgboost.pkl",
+    "Logistic Regression":          MODEL_DIR / "logistic_regression.pkl",
+    "Decision Tree":                MODEL_DIR / "decision_tree.pkl",
+    "kNN":                          MODEL_DIR / "knn.pkl",
+    "Naive Bayes":                  MODEL_DIR / "naive_bayes.pkl",
+    "Random Forest (Ensemble)":     MODEL_DIR / "random_forest.pkl",
+    "XGBoost (Ensemble)":           MODEL_DIR / "xgboost.pkl",
 }
 
 # ----------------------- Utilities -----------------------
@@ -52,7 +57,7 @@ def load_dataset():
 
 def build_model_registry():
     """Return fresh, untrained estimators keyed by name."""
-    return {
+    registry = {
         "Logistic Regression": Pipeline([
             ("scaler", StandardScaler()),
             ("clf", LogisticRegression(max_iter=500, solver="lbfgs"))
@@ -70,7 +75,9 @@ def build_model_registry():
         "Random Forest (Ensemble)": RandomForestClassifier(
             n_estimators=300, random_state=42
         ),
-        "XGBoost (Ensemble)": XGBClassifier(
+    }
+    if XGB_AVAILABLE:
+        registry["XGBoost (Ensemble)"] = XGBClassifier(
             n_estimators=400,
             max_depth=4,
             learning_rate=0.05,
@@ -80,8 +87,8 @@ def build_model_registry():
             random_state=42,
             eval_metric="logloss",
             n_jobs=4
-        ),
-    }
+        )
+    return registry
 
 def compute_metrics(y_true, y_pred, y_proba_or_score=None):
     m = {
@@ -118,12 +125,16 @@ def load_or_train_models(X_train, y_train):
     fresh_registry = build_model_registry()
     trained_any = False
 
-    for name, path in MODEL_FILES.items():
+    for name, default_path in MODEL_FILES.items():
+        # Skip XGB in MODEL_FILES if not available
+        if ("XGBoost" in name) and (not XGB_AVAILABLE):
+            continue
+
+        path = default_path
         if path.exists():
             try:
                 models[name] = joblib.load(path)
             except Exception:
-                # If loading fails, retrain
                 mdl = fresh_registry[name]
                 mdl.fit(X_train, y_train)
                 models[name] = mdl
@@ -133,7 +144,6 @@ def load_or_train_models(X_train, y_train):
                     pass
                 trained_any = True
         else:
-            # Train and save
             mdl = fresh_registry[name]
             mdl.fit(X_train, y_train)
             models[name] = mdl
@@ -151,6 +161,11 @@ def load_or_train_models(X_train, y_train):
 st.title("Machine Learning Assignment–2: Classification Models on Breast Cancer (Diagnostic)")
 st.caption("Six models + metrics + confusion matrix + classification report + CSV upload. "
            "If `.pkl` files are missing, the app trains and saves them automatically.")
+
+if not XGB_AVAILABLE:
+    st.sidebar.warning("XGBoost is not available in this environment. "
+                       "The app will run without it. "
+                       "To include it, ensure `xgboost` is in requirements.txt.")
 
 X, y, feature_names, target_names = load_dataset()
 
@@ -194,21 +209,15 @@ metrics_df["Value"] = metrics_df["Value"].apply(
 st.subheader("Evaluation metrics (Test split)")
 st.dataframe(metrics_df, width="stretch")
 
-# Confusion matrix without seaborn
+# Confusion matrix (table view, no plots)
 if show_confusion:
     cm = confusion_matrix(y_test, y_pred)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    im = ax.imshow(cm, cmap="Blues")
-    # Annotate cells
-    for (i, j), val in np.ndenumerate(cm):
-        ax.text(j, i, f"{val}", ha="center", va="center", color="black", fontsize=12)
-    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
-    ax.set_xticklabels(target_names); ax.set_yticklabels(target_names)
-    ax.set_xlabel("Predicted"); ax.set_ylabel("True")
-    ax.set_title(f"Confusion Matrix — {model_name}")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    st.pyplot(fig)
+    cm_df = pd.DataFrame(cm, index=[f"True {t}" for t in target_names],
+                            columns=[f"Pred {t}" for t in target_names])
+    st.subheader(f"Confusion Matrix — {model_name}")
+    st.dataframe(cm_df, width="stretch")
 
+# Classification report (text)
 if show_class_report:
     report_txt = classification_report(y_test, y_pred, target_names=target_names)
     st.text("Classification Report")
