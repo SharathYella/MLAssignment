@@ -1,65 +1,76 @@
 
 # app.py
-# Streamlit UI that loads pre-trained .pkl models from ./model and evaluates on a holdout split.
-# If .pkl artifacts are missing, it trains and saves them automatically.
-# No joblib / matplotlib / seaborn required. Uses Python's pickle only.
+# Streamlit UI for ML Assignment-2 on Breast Cancer (Diagnostic)
+# - Uses only: streamlit, numpy, pandas, scikit-learn, xgboost (optional)
+# - No seaborn/matplotlib/joblib
+# - Loads .pkl models from ./model; if missing, trains and saves them automatically.
+# - Shows metrics + confusion matrix (as a table) + classification report + CSV upload.
 
-import pickle
+import sys
 from pathlib import Path
+import pickle
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-from sklearn.datasets import load_breast_cancer
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import (
-    accuracy_score, roc_auc_score, precision_score, recall_score, f1_score,
-    matthews_corrcoef, confusion_matrix, classification_report
-)
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.ensemble import RandomForestClassifier
+st.set_page_config(page_title="ML Assignment-2 | Breast Cancer (Diagnostic)", layout="wide")
 
-# Try to import XGBoost; app still runs if not available.
+# ----------------------- Guard: dependency checks -----------------------
+MISSING = []
+
+try:
+    import sklearn  # noqa: F401
+    from sklearn.datasets import load_breast_cancer
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.metrics import (
+        accuracy_score, roc_auc_score, precision_score, recall_score, f1_score,
+        matthews_corrcoef, confusion_matrix, classification_report
+    )
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.naive_bayes import GaussianNB
+    from sklearn.ensemble import RandomForestClassifier
+except Exception:
+    MISSING.append("scikit-learn")
+
+# XGBoost is optional
 XGB_AVAILABLE = True
 try:
-    from xgboost import XGBClassifier
+    from xgboost import XGBClassifier  # noqa: F401
 except Exception:
     XGB_AVAILABLE = False
 
-st.set_page_config(page_title="ML Assignment-2 | Breast Cancer (Diagnostic)", layout="wide")
+if MISSING:
+    st.error(
+        "❌ Required package(s) missing: "
+        + ", ".join(MISSING)
+        + "\n\nPlease add them to **requirements.txt** in your repo root and redeploy.\n\n"
+        "Minimum requirements:\n"
+        "```\nstreamlit\nscikit-learn==1.4.2\npandas\nnumpy\nxgboost\n```\n"
+        "Then go to **Manage app → Reboot** (and Clear cache if needed)."
+    )
+    st.stop()
 
-# ----------------------- Constants -----------------------
+# ----------------------- Constants & helpers -----------------------
 MODEL_DIR = Path("model")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# File names used for saved artifacts
 FILENAME_MAP = {
     "Logistic Regression":          "logistic_regression.pkl",
     "Decision Tree":                "decision_tree.pkl",
     "kNN":                          "knn.pkl",
     "Naive Bayes":                  "naive_bayes.pkl",
     "Random Forest (Ensemble)":     "random_forest.pkl",
-    "XGBoost (Ensemble)":           "xgboost.pkl",
 }
-
-# ----------------------- Utilities -----------------------
-@st.cache_resource(show_spinner=False)
-def load_dataset():
-    ds = load_breast_cancer()
-    X = pd.DataFrame(ds.data, columns=ds.feature_names)
-    y = pd.Series(ds.target, name="target")
-    feature_names = list(ds.feature_names)
-    target_names = list(ds.target_names)  # ['malignant', 'benign'] -> 0, 1
-    return X, y, feature_names, target_names
+if XGB_AVAILABLE:
+    FILENAME_MAP["XGBoost (Ensemble)"] = "xgboost.pkl"
 
 def build_model_registry():
-    """Return fresh, untrained estimators keyed by display name."""
+    """Fresh, untrained estimators keyed by display name."""
     registry = {
         "Logistic Regression": Pipeline([
             ("scaler", StandardScaler()),
@@ -71,7 +82,6 @@ def build_model_registry():
             ("clf", KNeighborsClassifier(n_neighbors=7))
         ]),
         "Naive Bayes": Pipeline([
-            # Scaling not strictly required; kept for parity with earlier runs
             ("scaler", StandardScaler(with_mean=False)),
             ("clf", GaussianNB())
         ]),
@@ -92,6 +102,22 @@ def build_model_registry():
             n_jobs=4
         )
     return registry
+
+def pickle_save(obj, path: Path):
+    with open(path, "wb") as f:
+        pickle.dump(obj, f)
+
+def pickle_load(path: Path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+def load_dataset():
+    ds = load_breast_cancer()
+    X = pd.DataFrame(ds.data, columns=ds.feature_names)
+    y = pd.Series(ds.target, name="target")
+    feature_names = list(ds.feature_names)
+    target_names = list(ds.target_names)  # ['malignant', 'benign'] -> 0, 1
+    return X, y, feature_names, target_names
 
 def compute_metrics(y_true, y_pred, y_proba_or_score=None):
     m = {
@@ -119,14 +145,6 @@ def predict_proba_if_supported(model, X):
         return model.decision_function(X)
     return None
 
-def pickle_save(obj, path: Path):
-    with open(path, "wb") as f:
-        pickle.dump(obj, f)
-
-def pickle_load(path: Path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
 def load_or_train_models(X_train, y_train):
     """
     Load each model from model/*.pkl if present; otherwise train and save it.
@@ -137,7 +155,7 @@ def load_or_train_models(X_train, y_train):
     trained_any = False
 
     for name, estimator in fresh_registry.items():
-        fname = FILENAME_MAP.get(name, f"{name.lower().replace(' ', '_')}.pkl")
+        fname = FILENAME_MAP[name]
         path = MODEL_DIR / fname
 
         if path.exists():
@@ -145,10 +163,8 @@ def load_or_train_models(X_train, y_train):
                 models[name] = pickle_load(path)
                 continue
             except Exception:
-                # Fall back to retraining if load fails
-                pass
+                pass  # Will retrain
 
-        # Train and save
         estimator.fit(X_train, y_train)
         models[name] = estimator
         try:
@@ -161,18 +177,17 @@ def load_or_train_models(X_train, y_train):
         st.info("Some model files were missing. Trained models were saved to `model/*.pkl`.")
     return models
 
-# ----------------------- App UI -----------------------
-st.title("Machine Learning Assignment–2: Classification Models on Breast Cancer (Diagnostic)")
-st.caption("Six models + metrics + confusion matrix + classification report + CSV upload. "
+# ----------------------- UI -----------------------
+st.title("Machine Learning Assignment–2: Breast Cancer (Diagnostic)")
+st.caption("6 models, full metrics, confusion matrix (table), classification report, CSV upload. "
            "If `.pkl` files are missing, the app trains and saves them automatically.")
 
 if not XGB_AVAILABLE:
-    st.sidebar.warning("XGBoost is not available in this environment. "
-                       "The app will run without it. "
-                       "To include it, ensure `xgboost` is in requirements.txt.")
+    st.sidebar.warning("XGBoost not available. The app runs without it. "
+                       "Add `xgboost` to requirements.txt to enable.")
 
+# Data
 X, y, feature_names, target_names = load_dataset()
-
 with st.expander("ℹ️ Dataset details", expanded=False):
     st.write(
         f"**Instances**: {X.shape[0]}  |  "
@@ -181,12 +196,12 @@ with st.expander("ℹ️ Dataset details", expanded=False):
     )
     st.write("Binary classification dataset with 30 numeric features extracted from digitized images of a breast mass.")
 
-# Split for evaluation
+# Split
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, stratify=y, random_state=42
 )
 
-# Load or train models
+# Models
 with st.spinner("Loading models..."):
     models = load_or_train_models(X_train, y_train)
 
@@ -194,9 +209,9 @@ with st.spinner("Loading models..."):
 st.sidebar.header("Controls")
 model_name = st.sidebar.selectbox("Choose a model", list(models.keys()), index=0)
 show_class_report = st.sidebar.checkbox("Show classification report", value=True)
-show_confusion    = st.sidebar.checkbox("Show confusion matrix", value=True)
+show_confusion    = st.sidebar.checkbox("Show confusion matrix (table)", value=True)
 
-# Evaluate selected model
+# Evaluate
 model = models[model_name]
 with st.spinner(f"Evaluating {model_name} ..."):
     y_pred  = model.predict(X_test)
@@ -213,7 +228,6 @@ metrics_df["Value"] = metrics_df["Value"].apply(
 st.subheader("Evaluation metrics (Test split)")
 st.dataframe(metrics_df)
 
-# Confusion matrix (table view — no plotting packages)
 if show_confusion:
     cm = confusion_matrix(y_test, y_pred)
     cm_df = pd.DataFrame(cm, index=[f"True {t}" for t in target_names],
@@ -221,13 +235,12 @@ if show_confusion:
     st.subheader(f"Confusion Matrix — {model_name}")
     st.dataframe(cm_df)
 
-# Classification report (text)
 if show_class_report:
     report_txt = classification_report(y_test, y_pred, target_names=target_names)
     st.text("Classification Report")
     st.code(report_txt, language="text")
 
-# ----------------------- Upload test CSV -----------------------
+# Upload
 st.subheader("Upload a test CSV (optional)")
 st.caption(
     "Upload **only test data**. CSV must contain the **30 feature columns** "
