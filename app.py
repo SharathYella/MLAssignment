@@ -1,3 +1,4 @@
+!pip install seaborn
 
 # app.py
 # Streamlit UI that loads pre-trained .pkl models from ./model and evaluates on a holdout split.
@@ -198,3 +199,4 @@ if uploaded is not None:
         st.error(f"Could not read CSV: {e}")
 
 st.caption("Run this on **BITS Virtual Lab** and take a single screenshot showing metrics + confusion matrix for submission.")
+
