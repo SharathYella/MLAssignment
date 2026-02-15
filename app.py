@@ -1,6 +1,7 @@
 
 # app.py
-# Streamlit ML Assignment-2 
+# Streamlit ML Assignment‑2 
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -21,7 +22,7 @@ from sklearn.metrics import (
 # Page Configuration
 # =========================
 st.set_page_config(page_title="ML Assignment 2 - Breast Cancer", layout="wide")
-st.title("Machine Learning - Multiple Classification Models")
+st.title("Machine Learning Assignment-2")
 st.subheader("Breast Cancer Classification Dashboard")
 
 # =========================
@@ -80,6 +81,7 @@ if model is None:
 # =========================
 # Evaluation & Metrics
 # =========================
+# Predictions & scores
 y_pred = model.predict(X_test)
 y_score = None
 if hasattr(model, "predict_proba"):
@@ -93,61 +95,63 @@ elif hasattr(model, "decision_function"):
     except Exception:
         y_score = None
 
-metrics = {
-    "Accuracy": accuracy_score(y_test, y_pred),
-    "Precision": precision_score(y_test, y_pred),
-    "Recall": recall_score(y_test, y_pred),
-    "F1 Score": f1_score(y_test, y_pred),
-    "MCC": matthews_corrcoef(y_test, y_pred),
-    "AUC Score": roc_auc_score(y_test, y_score) if y_score is not None else np.nan,
-}
+# Prepare metrics in requested structured table
+metrics_rows = [
+    ("Accuracy", accuracy_score(y_test, y_pred)),
+    ("AUC Score", roc_auc_score(y_test, y_score) if y_score is not None else np.nan),
+    ("Precision", precision_score(y_test, y_pred)),
+    ("Recall", recall_score(y_test, y_pred)),
+    ("F1 Score", f1_score(y_test, y_pred)),
+    ("Matthews Correlation Coefficient (MCC Score)", matthews_corrcoef(y_test, y_pred)),
+]
+metrics_df = pd.DataFrame(metrics_rows, columns=["Metric", "Value"])
+metrics_df["Value"] = metrics_df["Value"].apply(
+    lambda v: f"{v:.4f}" if isinstance(v, (float, np.floating)) and not np.isnan(v) else ("0.0000" if isinstance(v, float) and np.isnan(v) else v)
+)
 
+# ---- Display order: Metrics table first
 st.write(f"### Performance: {model_choice}")
-cols = st.columns(6)
-for i, (name, val) in enumerate(metrics.items()):
-    # Guard against nan display for AUC if score is None
-    display_val = 0.0 if (isinstance(val, float) and np.isnan(val)) else val
-    cols[i].metric(name, f"{display_val:.4f}" if isinstance(display_val, float) else str(display_val))
+st.dataframe(metrics_df, use_container_width=True)
 
 # =========================
-# Confusion Matrix (Matplotlib Heatmap)
+# Confusion Matrix (Matplotlib Heatmap) — shown below the metrics table
 # =========================
+st.write("#### Confusion Matrix")
 cm = confusion_matrix(y_test, y_pred)
+
 # Label names (align to target_names from dataset)
 row_labels = [f"{target_names[0]}", f"{target_names[1]}"]   # Actual
 col_labels = [f"{target_names[0]}", f"{target_names[1]}"]   # Predicted
 
-c1, c2 = st.columns(2)
+fig, ax = plt.subplots(figsize=(5.2, 4.0), dpi=150)
+im = ax.imshow(cm, cmap="Blues")
 
-with c1:
-    st.write("#### Confusion Matrix")
-    fig, ax = plt.subplots(figsize=(4.8, 3.8), dpi=150)
-    im = ax.imshow(cm, cmap="Blues")
+# Ticks & labels
+ax.set_xticks([0, 1], labels=[f"Pred {lab}" for lab in col_labels])
+ax.set_yticks([0, 1], labels=[f"Actual {lab}" for lab in row_labels])
 
-    # Ticks & labels
-    ax.set_xticks([0, 1], labels=[f"Pred {lab}" for lab in col_labels])
-    ax.set_yticks([0, 1], labels=[f"Actual {lab}" for lab in row_labels])
+# Cell text
+max_val = cm.max() if cm.size else 1
+for i in range(cm.shape[0]):
+    for j in range(cm.shape[1]):
+        val = cm[i, j]
+        color = "white" if val > 0.6 * max_val else "black"
+        ax.text(j, i, val, ha="center", va="center", color=color, fontsize=11, fontweight="bold")
 
-    # Cell text
-    max_val = cm.max() if cm.size else 1
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            val = cm[i, j]
-            color = "white" if val > 0.6 * max_val else "black"
-            ax.text(j, i, val, ha="center", va="center", color=color, fontsize=11, fontweight="bold")
+# Axes labels and colorbar
+ax.set_xlabel("Predicted")
+ax.set_ylabel("Actual")
+cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+cbar.ax.set_ylabel("Count", rotation=270, labelpad=10)
 
-    # Axes labels and colorbar
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.ax.set_ylabel("Count", rotation=270, labelpad=10)
+plt.tight_layout()
+st.pyplot(fig, clear_figure=True)
 
-    plt.tight_layout()
-    st.pyplot(fig, clear_figure=True)
-
-with c2:
-    st.write("#### Classification Report")
-    st.code(classification_report(y_test, y_pred, target_names=target_names), language="text")
+# =========================
+# Classification report (kept after CM)
+# =========================
+st.write("#### Classification Report")
+st.code(classification_report(y_test, y_pred, target_names=target_names), language="text")
 
 # =========================
 # Custom CSV Prediction
