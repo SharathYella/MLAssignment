@@ -33,7 +33,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-st.title("Machine Learning Assignment‑2")
+st.title("Machine Learning Assignment‑ Multiple Classification Model")
 st.subheader("Breast Cancer Classification Dashboard")
 
 # =========================
@@ -348,3 +348,4 @@ st.caption(
     "Tip: Use the sidebar to toggle normalization and curves, and to adjust the decision threshold "
     "when the selected model exposes probabilities."
 )
+
